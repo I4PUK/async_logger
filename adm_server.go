@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 type AdminServ struct {
 	logger SimpleEventLogger
@@ -47,7 +50,12 @@ func (adm *AdminServ) Statistics(interval *StatInterval, stream Admin_Statistics
 }
 
 func getAdminInstance() *AdminServ {
-	return &AdminServ{}
+	return &AdminServ{
+		logger: SimpleEventLogger{
+			mu:          sync.Mutex{},
+			subscribers: make(map[chan *Event]struct{}),
+		},
+	}
 }
 
 func emptyStat() *Stat {
