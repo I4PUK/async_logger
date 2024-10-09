@@ -33,8 +33,11 @@ func (el *SimpleEventLogger) LogEvent(consumer, method, host string) {
 func (el *SimpleEventLogger) Subscribe() chan *Event {
 	ch := make(chan *Event)
 	el.mu.Lock()
+
 	defer el.mu.Unlock()
+
 	el.subscribers[ch] = struct{}{}
+
 	return ch
 }
 

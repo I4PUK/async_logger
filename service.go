@@ -11,7 +11,6 @@ import (
 	"log"
 	"net"
 	"strings"
-	"time"
 )
 
 var (
@@ -20,44 +19,6 @@ var (
 	errMissingMetadata = status.Errorf(codes.InvalidArgument, "missing metadata")
 	errInvalidConsumer = status.Errorf(codes.Unauthenticated, "invalid consumer")
 )
-
-var ServiceEventLogger SimpleEventLogger
-
-type BizServ struct{}
-type AdminServ struct{}
-
-func (biz BizServ) mustEmbedUnimplementedBizServer() {}
-
-func getBizInstance() *BizServ {
-	return &BizServ{}
-}
-
-func (biz BizServ) Check(ctx context.Context, nthg *Nothing) (*Nothing, error) {
-	return &Nothing{}, nil
-}
-
-func (biz BizServ) Add(ctx context.Context, nthg *Nothing) (*Nothing, error) {
-	return &Nothing{}, nil
-}
-
-func (biz BizServ) Test(ctx context.Context, nthg *Nothing) (*Nothing, error) {
-	return &Nothing{}, nil
-}
-
-func (adm *AdminServ) mustEmbedUnimplementedAdminServer() {}
-
-func (adm *AdminServ) Logging(n *Nothing, logServerStream Admin_LoggingServer) error {
-	ch := ServiceEventLogger.Subscribe()
-
-	for e := range ch {
-		err := logServerStream.Send(e)
-		if err != nil {
-			ServiceEventLogger.Unsubscribe(ch)
-			return err
-		}
-	}
-	return nil
-}
 
 func getConsumerName(ctx context.Context) (string, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
@@ -93,48 +54,6 @@ func authInterceptor(acl map[string][]string) grpc.UnaryServerInterceptor {
 
 		return nil, errInvalidConsumer
 	}
-}
-
-func emptyStat() *Stat {
-	return &Stat{
-		ByMethod:   make(map[string]uint64),
-		ByConsumer: make(map[string]uint64),
-	}
-}
-
-func updateStat(stat *Stat, e *Event) {
-	stat.Timestamp = time.Now().Unix()
-	stat.ByConsumer[e.Consumer]++
-	stat.ByMethod[e.Method]++
-}
-
-func (adm *AdminServ) Statistics(interval *StatInterval, stream Admin_StatisticsServer) error {
-	ticker := time.NewTicker(time.Duration(interval.IntervalSeconds) * time.Second)
-	ch := ServiceEventLogger.Subscribe()
-	stat := emptyStat()
-
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-stream.Context().Done():
-			ServiceEventLogger.Unsubscribe(ch)
-			return stream.Context().Err()
-		case e := <-ch:
-			updateStat(stat, e)
-		case <-ticker.C:
-			err := stream.Send(stat)
-			if err != nil {
-				ServiceEventLogger.Unsubscribe(ch)
-				return err
-			}
-			stat = emptyStat()
-		}
-	}
-}
-
-func getAdminInstance() *AdminServ {
-	return &AdminServ{}
 }
 
 // StartMyMicroservice начальная точка входа
