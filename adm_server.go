@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -59,7 +60,10 @@ func (adm *AdminServ) Statistics(interval *StatInterval, stream Admin_Statistics
 
 func getAdminInstance(logger *SimpleEventLogger) *AdminServ {
 	return &AdminServ{
-		logger,
+		logger: SimpleEventLogger{
+			mu:          sync.Mutex{},
+			subscribers: make(map[chan *Event]struct{}),
+		},
 	}
 }
 
