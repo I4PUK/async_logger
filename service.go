@@ -33,39 +33,49 @@ func getConsumerName(ctx context.Context) (string, error) {
 	return consumers[0], nil
 }
 
-func logInterceptor(logger *SimpleEventLogger) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context,
-		req interface{},
-		info *grpc.UnaryServerInfo,
-		handler grpc.UnaryHandler) (resp interface{}, err error) {
-		consumer, err := getConsumerName(ctx)
+func authorize(ctx context.Context, method string, acl map[string][]string) (bool, error) {
+	consumer, err := getConsumerName(ctx)
+	if err != nil {
+		return false, err
+	}
 
-		logger.LogEvent(consumer, info.FullMethod)
-		return handler(ctx, req)
+	methods, ok := acl[consumer]
+	if !ok || len(methods) == 0 {
+		return false, errInvalidConsumer
+	}
+	for _, m := range methods {
+		fullM := strings.Split(m, "/")
+		if strings.HasSuffix(method, fullM[1]+"/"+fullM[2]) || (fullM[2] == "*" && strings.Contains(method, fullM[1])) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func streamAuthInterceptor(acl map[string][]string) grpc.StreamServerInterceptor {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		ok, err := authorize(ss.Context(), info.FullMethod, acl)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errInvalidConsumer
+		}
+		return handler(srv, ss)
 	}
 }
 
 func authInterceptor(acl map[string][]string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		consumer, err := getConsumerName(ctx)
-		method := info.FullMethod
-
+		ok, err := authorize(ctx, info.FullMethod, acl)
 		if err != nil {
 			return nil, err
 		}
-
-		methods, ok := acl[consumer]
-		if !ok || len(methods) == 0 {
+		if !ok {
 			return nil, errInvalidConsumer
 		}
-		for _, m := range methods {
-			fullM := strings.Split(m, "/")
-			if strings.HasSuffix(method, fullM[1]+"/"+fullM[2]) || (fullM[2] == "*" && strings.Contains(method, fullM[1])) {
-				return handler(ctx, req)
-			}
-		}
 
-		return nil, errInvalidConsumer
+		return handler(ctx, req)
 	}
 }
 
@@ -89,7 +99,7 @@ func StartMyMicroservice(ctx context.Context, addr string, ACLData string) error
 		subscribers: make(map[chan *Event]struct{}),
 	}
 
-	server := grpc.NewServer(grpc.UnaryInterceptor(authInterceptor(acl)), grpc.UnaryInterceptor(logInterceptor(logger)))
+	server := grpc.NewServer(grpc.UnaryInterceptor(authInterceptor(acl)), grpc.StreamInterceptor(streamAuthInterceptor(acl)))
 
 	bizModule := getBizInstance()
 	adminModule := getAdminInstance(logger)
