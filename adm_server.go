@@ -1,7 +1,7 @@
 package main
 
 import (
-	"sync"
+	"context"
 	"time"
 )
 
@@ -14,14 +14,22 @@ func (adm *AdminServ) mustEmbedUnimplementedAdminServer() {}
 func (adm *AdminServ) Logging(n *Nothing, logServerStream Admin_LoggingServer) error {
 	ch := adm.logger.Subscribe()
 
-	for e := range ch {
-		err := logServerStream.Send(e)
-		if err != nil {
+	ctxTimeout, _ := context.WithTimeout(context.Background(), time.Second*3)
+
+	for {
+		select {
+		case <-ctxTimeout.Done():
 			adm.logger.Unsubscribe(ch)
-			return err
+			return nil
+		case msg := <-ch:
+			err := logServerStream.Send(msg)
+			if err != nil {
+				adm.logger.Unsubscribe(ch)
+				return err
+			}
 		}
 	}
-	return nil
+
 }
 
 func (adm *AdminServ) Statistics(interval *StatInterval, stream Admin_StatisticsServer) error {
