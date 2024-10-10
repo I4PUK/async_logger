@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 )
 
 var (
@@ -30,6 +31,18 @@ func getConsumerName(ctx context.Context) (string, error) {
 		return "", errInvalidConsumer
 	}
 	return consumers[0], nil
+}
+
+func logInterceptor(logger *SimpleEventLogger) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context,
+		req interface{},
+		info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler) (resp interface{}, err error) {
+		consumer, err := getConsumerName(ctx)
+
+		logger.LogEvent(consumer, info.FullMethod)
+		return handler(ctx, req)
+	}
 }
 
 func authInterceptor(acl map[string][]string) grpc.UnaryServerInterceptor {
@@ -71,10 +84,15 @@ func StartMyMicroservice(ctx context.Context, addr string, ACLData string) error
 		log.Println("Cannot listen port: ", err)
 	}
 
-	server := grpc.NewServer(grpc.UnaryInterceptor(authInterceptor(acl)))
+	logger := &SimpleEventLogger{
+		mu:          sync.Mutex{},
+		subscribers: make(map[chan *Event]struct{}),
+	}
+
+	server := grpc.NewServer(grpc.UnaryInterceptor(authInterceptor(acl)), grpc.UnaryInterceptor(logInterceptor(logger)))
 
 	bizModule := getBizInstance()
-	adminModule := getAdminInstance()
+	adminModule := getAdminInstance(logger)
 
 	RegisterBizServer(server, bizModule)
 	RegisterAdminServer(server, adminModule)
