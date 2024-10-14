@@ -24,7 +24,7 @@ var (
 func getConsumerName(ctx context.Context) (string, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return "", errMissingMetadata
+		return "", errInvalidConsumer
 	}
 	consumers, ok := md[authKey]
 	if !ok || len(consumers) == 0 {
@@ -52,9 +52,17 @@ func authorize(ctx context.Context, method string, acl map[string][]string) (boo
 	return false, nil
 }
 
-func streamAuthInterceptor(acl map[string][]string) grpc.StreamServerInterceptor {
+func streamAuthInterceptor(acl map[string][]string, host string, logger *SimpleEventLogger, stats *SimpleEventStats) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		name, errCtx := getConsumerName(context.Background())
+
+		if errCtx != nil {
+			return errCtx
+		}
+
+		logger.LogEvent(name, info.FullMethod, host)
 		ok, err := authorize(ss.Context(), info.FullMethod, acl)
+
 		if err != nil {
 			return err
 		}
@@ -65,8 +73,16 @@ func streamAuthInterceptor(acl map[string][]string) grpc.StreamServerInterceptor
 	}
 }
 
-func authInterceptor(acl map[string][]string) grpc.UnaryServerInterceptor {
+func unaryAuthInterceptor(acl map[string][]string, host string, logger *SimpleEventLogger, stats *SimpleEventStats) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		name, errCtx := getConsumerName(context.Background())
+
+		if errCtx != nil {
+			return nil, errCtx
+		}
+
+		logger.LogEvent(name, info.FullMethod, host)
+
 		ok, err := authorize(ctx, info.FullMethod, acl)
 		if err != nil {
 			return nil, err
@@ -99,10 +115,29 @@ func StartMyMicroservice(ctx context.Context, addr string, ACLData string) error
 		subscribers: make(map[chan *Event]struct{}),
 	}
 
-	server := grpc.NewServer(grpc.UnaryInterceptor(authInterceptor(acl)), grpc.StreamInterceptor(streamAuthInterceptor(acl)))
+	stats := &SimpleEventStats{
+		subscribers: make(map[chan *Event]struct{}),
+		stats: Stat{
+			ByMethod:   make(map[string]uint64),
+			ByConsumer: make(map[string]uint64),
+		},
+	}
+
+	hostPort := strings.Split(addr, ":")
+
+	var host string
+	if len(hostPort) == 2 {
+		host = hostPort[0] + ":"
+	} else {
+		host = defaultHost + ":"
+	}
+
+	server := grpc.NewServer(
+		grpc.UnaryInterceptor(unaryAuthInterceptor(acl, host, logger, stats)),
+		grpc.StreamInterceptor(streamAuthInterceptor(acl, host, logger, stats)))
 
 	bizModule := getBizInstance()
-	adminModule := getAdminInstance(logger)
+	adminModule := getAdminInstance(host, logger, stats)
 
 	RegisterBizServer(server, bizModule)
 	RegisterAdminServer(server, adminModule)

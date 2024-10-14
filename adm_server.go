@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"sync"
 	"time"
 )
 
 type AdminServ struct {
-	logger SimpleEventLogger
+	host   string
+	logger *SimpleEventLogger
+	stats  *SimpleEventStats
 }
 
 func (adm *AdminServ) mustEmbedUnimplementedAdminServer() {}
@@ -36,7 +37,7 @@ func (adm *AdminServ) Logging(n *Nothing, logServerStream Admin_LoggingServer) e
 func (adm *AdminServ) Statistics(interval *StatInterval, stream Admin_StatisticsServer) error {
 	ticker := time.NewTicker(time.Duration(interval.IntervalSeconds) * time.Second)
 	ch := adm.logger.Subscribe()
-	stat := emptyStat()
+	stat := adm.stats.InitStat()
 
 	defer ticker.Stop()
 
@@ -46,36 +47,22 @@ func (adm *AdminServ) Statistics(interval *StatInterval, stream Admin_Statistics
 			adm.logger.Unsubscribe(ch)
 			return stream.Context().Err()
 		case e := <-ch:
-			updateStat(stat, e)
+			adm.stats.UpdateStat(e)
 		case <-ticker.C:
 			err := stream.Send(stat)
 			if err != nil {
 				adm.logger.Unsubscribe(ch)
 				return err
 			}
-			stat = emptyStat()
+			adm.stats.InitStat()
 		}
 	}
 }
 
-func getAdminInstance(logger *SimpleEventLogger) *AdminServ {
+func getAdminInstance(host string, logger *SimpleEventLogger, stats *SimpleEventStats) *AdminServ {
 	return &AdminServ{
-		logger: SimpleEventLogger{
-			mu:          sync.Mutex{},
-			subscribers: make(map[chan *Event]struct{}),
-		},
+		host:   host,
+		logger: logger,
+		stats:  stats,
 	}
-}
-
-func emptyStat() *Stat {
-	return &Stat{
-		ByMethod:   make(map[string]uint64),
-		ByConsumer: make(map[string]uint64),
-	}
-}
-
-func updateStat(stat *Stat, e *Event) {
-	stat.Timestamp = time.Now().Unix()
-	stat.ByConsumer[e.Consumer]++
-	stat.ByMethod[e.Method]++
 }
